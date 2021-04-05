@@ -1,0 +1,184 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Nils Risgaard-Petersen"
+date: "5/4/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Summary
+This study investigate the Barbell lifts performed correctly and incorrectly in 5 different ways ( A, B, C, D, E) by   6 persons. Their performance were  were quantified from accelerometers on the belt, forearm, arm, and dumbbell. From these data the mode of performance where predicted the from a Random forest model. The model was highly accurate accuracy >0.9997, p<2.2e-16) and the OOB error was < 0.006 for number of trees >100. The 5 important variable in the model was yaw_belt, roll_belt, magnet_dumbell_z, pich_belt  and magnet_dumbbell_y. Applying the model on a smaller test data set,showed a similar accuracy.    
+
+# The data 
+
+The data were retrieved from https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv   (the training data set)  and  https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv (the Quiz test data set). Below I focus only on the training set, which will be trimmed and down scaled and split into a internal training and test set.  
+
+### Loading of the dataset
+```{r}
+Perf.Train <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+```
+
+### Trimming and downscaling of the dataset
+
+The Perf.Train dataframe has 19622 obs of 160 variables. Many of those variables are either variables with near zero variance, na's or irrelevant for the analysis. These will be removed by means of procedures outlined below.
+
+```{r message=FALSE}
+library(dplyr)
+library(caret)
+library(randomForest)
+
+```
+
+
+Removal of predictors with near zero variance
+
+
+```{r}
+NZV<-nearZeroVar(Perf.Train)
+Perf.NZV<-Perf.Train[,-NZV]
+Perf.Train<-Perf.NZV
+rm(Perf.NZV); rm(NZV)
+
+```
+
+Removal of preditors with more that 95% NAs 
+
+```{r}
+nNa<-sapply(Perf.Train,function(x) mean(!is.na(x)))>0.95   #Helper function  
+Perf.nNA<-Perf.Train[,nNa]
+dim(Perf.nNA)
+Perf.Train<-Perf.nNA
+rm(Perf.nNA);rm(nNA)
+```
+
+
+Removal of predictors with no relevance
+
+```{r}
+leaveOut<-c("X","user_name", "raw_timestamp_part_1","raw_timestamp_part_2", "cvtd_timestamp" , "num_window" ) 
+Perf.leave<-select(Perf.Train, -all_of(leaveOut))
+Perf.Train<-Perf.leave
+rm(Perf.leave); rm(leaveOut)
+
+```
+
+Redefinition of  the classe variable
+
+
+```{r}
+Perf.Train$classe<-as.factor(Perf.Train$classe) # the classe variable is defined as a factor,otherwise ther will be problems with the randomforest method.
+```
+
+The overall trimming resulted in a data frame with 19622 obs of 53 variables.
+
+
+Definition of the training and the test set
+The Perf.Trrain dataframe is mow split in to a training set ( 70% of the observations)and a test set (30% of the observations)
+
+
+```{r}
+inTrain = createDataPartition(Perf.Train$classe, p =0.7, list=FALSE)
+training = Perf.Train[inTrain,]
+testing = Perf.Train[-inTrain,]
+rm(Perf.Train)
+```
+
+# Modeling
+
+I decided to use the random forest to model the data as preliminary tests showed that this method is the most accurate. No cross validation procedure was applied directly as this according to my understanding is implemented in the algorithm.  And the training control is not implemented in the random forest packagde.  (the alternative however could be to use the carret package, that enable such feature.).  Instead I decided to apply model tuning to select the optimal numbers of variables randomly sampled as candidate at each split
+
+
+### Model tuning
+
+```{r}
+set.seed(3101318)
+RF_tune<-data.frame(tuneRF(training[,-53], training[,53], stepFactor =1.5, improve=1e-5, ntree=500, plot=FALSE ))
+```
+
+
+```{r,fig.height=3,echo=FALSE}
+
+ggplot(data=RF_tune, aes(x=mtry, y=OOBError))+geom_point()+geom_line(col="red")
+```
+
+Figure 1: The OOB error against the numbers of variables randomly sampled at each split (ntry). As seen from the fig the optimal number is 10
+
+### Model formulation and evaluation
+
+From the result of the tuning procedure I set the ntry parameter to 10. Premilinar tests have shown that OBB error decreases to a constant value around 0.006 for ntrees>90. I find this acceptable and as a consequece the ntree parameter is set to 100
+
+```{r}
+set.seed(3101318)
+model_rf<-randomForest(classe~., data=training, ntry=10, ntree=100, importance=TRUE) # The tuned model
+```
+
+The OOB error was retrieved from the random forest object model_rf. As seen from the fig 2 the OOB error decreases to a value below 0.006 for number of trees >90. As mentioned above a test run with ntrees=500 did not result in further significant decrease in the OOB error. 
+
+
+```{r,fig.height=3,echo=FALSE}
+
+error<-data.frame(model_rf$err.rate,nTrees=seq(1,model_rf$ntree, by=1))
+
+ggplot(data=error, aes(x=nTrees,y=OOB))+geom_point()+geom_line()+geom_hline(yintercept=0.006, col="red")
+```
+
+Figure 2 The OBB error against the number of trees in the random forest model
+
+
+The importance of the predictors were evaluated from the resulting mean decrease in accuracy upon their elimination from the model. As seen in figure 3 the most important predictors were yaw_belt>roll_belt>magnet_dumbbelt_z>pitch_belt>magnet_dumbbelt_y
+
+
+
+```{r,fig.height=6,echo=FALSE}
+
+varImpPlot(model_rf, type=1, sort=TRUE, main="Variable Importance", n.var=10) 
+
+```
+
+Figure 3. Variable importance: mean decrease of accuracy from elimination of predictors in the model . Only the effect of the upper most 10 important predictors are shown.
+
+
+
+To check the accuracy of the of the model a confusion matrix was calculated from model predictions based om the training set.
+As seen from the output the model was highly accurate. The 95% CI of the accuracy was 0.9997- 1 and p< 2.2e-16 
+
+```{r}
+predict_RF<-predict(model_rf,newdata=training)  # predicting the performance from the model
+confusionM_RF<-confusionMatrix(predict_RF,training$classe) # calculating the confusion matrix
+print(confusionM_RF)
+```
+
+### Model testing
+
+The model was tested on the testdata set. As seen from the output model performed well also on the test set, though the accuracy was sightly lower than for the training set. The 95% C.I for the accuracy was 0.9923- 0.9963.
+
+```{r}
+predict_RF_test<-predict(model_rf,newdata=testing)
+confusionM_RF_test<-confusionMatrix(predict_RF_test,testing$classe)
+print(confusionM_RF_test)
+```
+
+
+The model was further tested on the quiz data set
+
+```{r}
+Quiz.data<-read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+predict_RF_Quiz<-predict(model_rf,newdata=Quiz.data)
+
+```
+
+and gave accurate predictions:
+
+```{r}
+print(predict_RF_Quiz)
+```
+
+
+
+# Conclusions
+
+In the present study I have applied random forest modeling to predict the performance of 6 persons Barbell lifts.
+The model was tuned with respect to the choice of the number of  variables included in each split and . The OOB error was low and approached a minimum value for the number of trees > 100. This  motivated a further tuning of the model so that a max of 100 trees were calculated. The model predicted the performance with great accurateness both on the training and the test data set.  Further the model predicted accurately the performance in the quiz data set.  Five predictors drove most of the accurateness, which could motivate a further down scaling of the data set, so that this included only these predictors.    
+
